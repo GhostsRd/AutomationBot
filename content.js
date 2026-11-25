@@ -1,31 +1,18 @@
-if (!window.odooTurboProV14) {
-  window.odooTurboProV14 = true;
+if (!window.odooFullSearchRobotV12) {
+  window.odooFullSearchRobotV12 = true;
   window.abortOdooTask = false;
-  window.odooCache = {}; // Cache automatique des sélections validées
 
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-  // Attente intelligente : s'arrête dès que Odoo a fini de charger au lieu d'attendre inutilement
-  async function attendreOdoo(msBase, factor = 1) {
-    await sleep(Math.max(60, msBase * factor));
-    let i = 0;
-    while (i < 20) {
+  async function attendreOdoo(msBase, factor = 2) {
+    await sleep(msBase * factor);
+    let tentatives = 0;
+    while (tentatives < 25) {
       const loader = document.querySelector('.o_loading:not([style*="display: none"]), .o_blockUI');
       if (!loader || loader.offsetParent === null) break;
-      await sleep(120);
-      i++;
+      await sleep(250);
+      tentatives++;
     }
-  }
-
-  // Attend activement l'apparition des éléments dans le menu déroulant (max 1.5s)
-  async function attendreDropdownOuvert(timeoutMs = 1500) {
-    const debut = Date.now();
-    while (Date.now() - debut < timeoutMs) {
-      const items = getElementsDropdown();
-      if (items.length > 0) return items;
-      await sleep(70);
-    }
-    return [];
   }
 
   function clicOdoo(el) {
@@ -99,7 +86,7 @@ if (!window.odooTurboProV14) {
   const STOP_WORDS = new Set([
     'achat', 'de', 'du', 'des', 'le', 'la', 'les', 'un', 'une', 'et', 'ou',
     'pour', 'avec', 'sans', 'sur', 'dans', 'par', 'au', 'aux', 'en', 'd', 'l',
-    'mvt', 'gestion', 'suivi', 'maintien', 'optimisation', 'renforcement', 'pour'
+    'prestation', 'paiement', 'fourniture', 'kit', 'ici', 'site', 'remplacement', 'pour'
   ]);
 
   function normaliser(str) {
@@ -110,7 +97,7 @@ if (!window.odooTurboProV14) {
       .trim();
   }
 
-  function extraireMotsCles(str) {
+  function extraireMotsClesRecherche(str) {
     return normaliser(str)
       .split(/[\s:_-]+/)
       .filter(m => m.length >= 3 && !STOP_WORDS.has(m));
@@ -121,79 +108,15 @@ if (!window.odooTurboProV14) {
     return match ? match[0] : null;
   }
 
-  // SÉLECTION DIRECTE ULTRA-RAPIDE
-  async function selectionnerOptionDirecte(cellule, texteCible, factor) {
-    if (!cellule || !texteCible || window.abortOdooTask) return false;
-    const cibleNorm = texteCible.trim().toLowerCase();
-
-    clicOdoo(cellule);
-    await attendreOdoo(80, factor);
-
-    const selectEl = cellule.querySelector('select');
-    if (selectEl) {
-      const opt = Array.from(selectEl.options).find(o =>
-        o.text.trim().toLowerCase() === cibleNorm || o.text.toLowerCase().includes(cibleNorm)
-      );
-      if (opt) {
-        selectEl.value = opt.value;
-        selectEl.dispatchEvent(new Event('change', { bubbles: true }));
-        cellule.style.outline = '2px solid #00c853';
-        await attendreOdoo(120, factor);
-        return true;
-      }
-      return false;
-    }
-
-    const input = cellule.querySelector('input');
-    if (!input) return false;
-
-    if (input.value.trim().toLowerCase() === cibleNorm && !cellule.classList.contains('o_field_invalid')) {
-      return true;
-    }
-
-    const terme = texteCible.length > 26 ? texteCible.substring(0, 26) : texteCible;
-    simulerFrappeOdoo(input, terme);
-    await attendreDropdownOuvert(1200 * factor);
-
-    let items = getOptionsOuvertesOdoo();
-    let match = items.find(el => el.innerText.trim().toLowerCase() === cibleNorm) ||
-                items.find(el => el.innerText.toLowerCase().includes(cibleNorm)) ||
-                (items.length === 1 ? items[0] : null);
-
-    // Fallback si libellé composé "[CODE] Nom"
-    if (!match && texteCible.includes(' ')) {
-      const sansCode = texteCible.split(' ').slice(1).join(' ').substring(0, 22);
-      if (sansCode.length >= 3) {
-        simulerFrappeOdoo(input, sansCode);
-        await attendreDropdownOuvert(1200 * factor);
-        items = getOptionsOuvertesOdoo();
-        match = items.find(el => el.innerText.toLowerCase().includes(sansCode.toLowerCase())) || (items.length === 1 ? items[0] : null);
-      }
-    }
-
-    if (match) {
-      clicOdoo(match);
-      await attendreOdoo(220, factor);
-      if (getOptionsOuvertesOdoo().length > 0) {
-        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
-        await attendreOdoo(150, factor);
-      }
-      if (!cellule.classList.contains('o_field_invalid') && input.value.trim() !== '') {
-        cellule.style.outline = '2px solid #00c853';
-        return true;
-      }
-    }
-
-    simulerFrappeOdoo(input, '');
-    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
-    return false;
-  }
-
-  // LECTURE COMPLÈTE (incluant Recherche avancée si > 8 résultats)
-  async function lireToutesOptionsCellule(cellule, factor, motsCles = [], autoriserModal = true) {
+  /**
+   * LIT TOUTES LES OPTIONS AU-DELÀ DES 8 PREMIÈRES LIGNES :
+   * 1. Teste les mots-clés de l'Excel pour filtrer côté serveur Odoo
+   * 2. Si "Recherche avancée..." est présent, ouvre la fenêtre modale Odoo et aspire TOUTES les lignes !
+   */
+  async function lireToutesOptionsCellule(cellule, factor, motsClesExcel = []) {
     if (!cellule) return [];
     clicOdoo(cellule);
-    await attendreOdoo(100, factor);
+    await attendreOdoo(250, factor);
 
     const selectEl = cellule.querySelector('select');
     if (selectEl) {
@@ -207,25 +130,13 @@ if (!window.odooTurboProV14) {
 
     const optionsCollectees = new Set();
 
-    // 1. Filtrage rapide par les mots-clés forts de l'Excel
-    for (const mot of motsCles.slice(0, 2)) {
-      if (!mot || mot.length < 2) continue;
-      simulerFrappeOdoo(input, mot);
-      await attendreDropdownOuvert(1000 * factor);
-      getOptionsOuvertesOdoo().forEach(el => optionsCollectees.add(el.innerText.trim()));
-      if (optionsCollectees.size > 0 && optionsCollectees.size <= 8) {
-        simulerFrappeOdoo(input, '');
-        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
-        return Array.from(optionsCollectees);
-      }
-    }
-
-    // 2. Ouverture du menu complet
+    // Étape 1 : Ouvre la liste de base (les 8 premiers éléments) et vérifie s'il y a "Recherche avancée..."
     simulerFrappeOdoo(input, '');
     const boutonMenu = cellule.querySelector('.o_dropdown_button, button');
     clicOdoo(boutonMenu || input);
-    const tousElementsMenu = await attendreDropdownOuvert(1200 * factor);
+    await attendreOdoo(650, factor);
 
+    let tousElementsMenu = getElementsDropdown();
     tousElementsMenu.forEach(el => {
       const txt = el.innerText.trim();
       const low = txt.toLowerCase();
@@ -234,24 +145,27 @@ if (!window.odooTurboProV14) {
       }
     });
 
-    // 3. Ouvre "Recherche avancée..." si présent et autorisé
     const btnRechercheAvancee = tousElementsMenu.find(el => {
       const low = el.innerText.toLowerCase();
       return low.includes('recherche avanc') || low.includes('search more');
     });
 
-    if (btnRechercheAvancee && autoriserModal) {
+    // Étape 2 : Si "Recherche avancée..." existe, l'ouvre pour aspirer TOUTES les options de la base (au-delà des 8 lignes) !
+    if (btnRechercheAvancee) {
       clicOdoo(btnRechercheAvancee);
-      await attendreOdoo(550, factor);
+      await attendreOdoo(850, factor);
 
       const modal = document.querySelector('.modal.show, .o_dialog');
       if (modal) {
+        // Lit toutes les lignes du tableau dans la fenêtre modale "Recherche avancée"
         const lignesModal = Array.from(modal.querySelectorAll('table.o_list_table tbody tr.o_data_row'));
         lignesModal.forEach(tr => {
+          // Prend la 1ère ou 2ème cellule texte non vide (Code / Nom du produit ou compte)
           const cellulesTexte = Array.from(tr.querySelectorAll('td'))
             .map(td => td.innerText.trim())
             .filter(t => t !== '' && t !== '0,00');
           if (cellulesTexte.length > 0) {
+            // Si la ligne a un code + un nom (ex: "[IT01]" et "Imprimante"), combine ou prend le libellé complet
             const libelle = cellulesTexte.length >= 2 && cellulesTexte[0].length <= 15
               ? `${cellulesTexte[0]} ${cellulesTexte[1]}`.trim()
               : cellulesTexte[0];
@@ -259,16 +173,101 @@ if (!window.odooTurboProV14) {
           }
         });
 
+        // Ferme proprement la fenêtre modale avec la croix ou le bouton Fermer
         const btnFermer = modal.querySelector('.btn-close, button.close, footer button.btn-secondary');
         if (btnFermer) clicOdoo(btnFermer);
         else document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
+        await attendreOdoo(400, factor);
+      }
+    }
+
+    // Étape 3 : En complément, tape les 2 principaux mots-clés de l'Excel dans l'input pour capter d'éventuelles correspondances exactes
+    for (const mot of motsClesExcel.slice(0, 2)) {
+      if (!mot || mot.length < 3) continue;
+      clicOdoo(cellule);
+      simulerFrappeOdoo(input, mot);
+      await attendreOdoo(650, factor);
+      getOptionsOuvertesOdoo().forEach(el => optionsCollectees.add(el.innerText.trim()));
+    }
+
+    // Nettoie l'input et referme le menu
+    simulerFrappeOdoo(input, '');
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
+    await sleep(150);
+
+    return Array.from(optionsCollectees);
+  }
+
+  /**
+   * SÉLECTIONNE UNE OPTION MÊME SI ELLE EST AU-DELÀ DE LA 8e LIGNE :
+   * Tape le nom exact dans l'input Odoo pour que le serveur la place en 1ère position, puis clique dessus !
+   */
+  async function selectionnerOptionExacte(cellule, texteCible, factor) {
+    if (!cellule || !texteCible || window.abortOdooTask) return false;
+    const cibleNorm = texteCible.trim().toLowerCase();
+
+    clicOdoo(cellule);
+    await attendreOdoo(250, factor);
+
+    const selectEl = cellule.querySelector('select');
+    if (selectEl) {
+      const opt = Array.from(selectEl.options).find(o =>
+        o.text.trim().toLowerCase() === cibleNorm || o.text.toLowerCase().includes(cibleNorm)
+      );
+      if (opt) {
+        selectEl.value = opt.value;
+        selectEl.dispatchEvent(new Event('change', { bubbles: true }));
+        cellule.style.outline = '2px solid #00c853';
+        await attendreOdoo(350, factor);
+        return true;
+      }
+      return false;
+    }
+
+    const input = cellule.querySelector('input');
+    if (!input) return false;
+
+    if (input.value.trim().toLowerCase() === cibleNorm && !cellule.classList.contains('o_field_invalid')) {
+      return true;
+    }
+
+    // Tape directement le texte cible (ou ses 25 premiers caractères) pour filtrer Odoo au-delà des 8 premières lignes
+    const termeRecherche = texteCible.length > 25 ? texteCible.substring(0, 25) : texteCible;
+    simulerFrappeOdoo(input, termeRecherche);
+    await attendreOdoo(750, factor);
+
+    let items = getOptionsOuvertesOdoo();
+    let match = items.find(el => el.innerText.trim().toLowerCase() === cibleNorm) ||
+                items.find(el => el.innerText.toLowerCase().includes(cibleNorm)) ||
+                items[0];
+
+    // Si le texte combiné "[CODE] Nom" n'a rien donné, essaie uniquement avec le Nom (sans le code entre crochets)
+    if (!match && texteCible.includes(' ')) {
+      const sansPrefixe = texteCible.split(' ').slice(1).join(' ').substring(0, 20);
+      if (sansPrefixe.length >= 3) {
+        simulerFrappeOdoo(input, sansPrefixe);
+        await attendreOdoo(750, factor);
+        items = getOptionsOuvertesOdoo();
+        match = items.find(el => el.innerText.toLowerCase().includes(sansPrefixe.toLowerCase())) || items[0];
+      }
+    }
+
+    if (match) {
+      clicOdoo(match);
+      await attendreOdoo(450, factor);
+      if (getOptionsOuvertesOdoo().length > 0) {
+        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
         await attendreOdoo(250, factor);
+      }
+      if (!cellule.classList.contains('o_field_invalid') && input.value.trim() !== '') {
+        cellule.style.outline = '2px solid #00c853';
+        return true;
       }
     }
 
     simulerFrappeOdoo(input, '');
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
-    return Array.from(optionsCollectees);
+    return false;
   }
 
   function trouverMatchSur(optionsDisponibles, valeurExcel, typeChamp) {
@@ -285,6 +284,7 @@ if (!window.odooTurboProV14) {
       const asOpt = extraireCodeAS(optRaw);
 
       if (asExcel && asOpt && asExcel !== asOpt) continue;
+
       if (opt === val) return optRaw;
 
       if (typeChamp === 'GL') {
@@ -300,12 +300,11 @@ if (!window.odooTurboProV14) {
       }
 
       if (typeChamp === 'UNITE') {
-        if (opt.startsWith(val.substring(0, 3))) return optRaw;
-        if (val === 'fft' && (opt.includes('forfait') || opt.includes('fft'))) return optRaw;
+        if (opt.startsWith(val.substring(0, 4))) return optRaw;
       }
 
-      if (typeChamp === 'PRODUIT' || typeChamp === 'ACTIVITE') {
-        const mots = extraireMotsCles(valeurExcel);
+      if (typeChamp === 'PRODUIT') {
+        const mots = extraireMotsClesRecherche(valeurExcel);
         if (mots.length > 0 && mots.every(m => opt.includes(m))) return optRaw;
       }
     }
@@ -316,7 +315,7 @@ if (!window.odooTurboProV14) {
   async function saisirTexte(cellule, valeur, factor) {
     if (!cellule || valeur === undefined || valeur === '' || window.abortOdooTask) return false;
     clicOdoo(cellule);
-    await attendreOdoo(80, factor);
+    await attendreOdoo(200, factor);
 
     const input = cellule.querySelector('input, textarea');
     if (!input) return false;
@@ -329,13 +328,13 @@ if (!window.odooTurboProV14) {
 
     input.dispatchEvent(new Event('input', { bubbles: true }));
     input.dispatchEvent(new Event('change', { bubbles: true }));
-    await attendreOdoo(80, factor);
+    await attendreOdoo(200, factor);
     cellule.style.outline = '2px solid #00c853';
     return true;
   }
 
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    const factor = request.speedFactor || 1;
+    const factor = request.speedFactor || 2;
 
     if (request.action === 'ABORT_NOW') {
       window.abortOdooTask = true;
@@ -343,7 +342,7 @@ if (!window.odooTurboProV14) {
       return true;
     }
 
-    if (request.action === 'FILL_ODOO_LINE_TURBO') {
+    if (request.action === 'FILL_ODOO_LINE_ASSISTED') {
       window.abortOdooTask = false;
       (async () => {
         try {
@@ -356,31 +355,21 @@ if (!window.odooTurboProV14) {
             const btnAjouter = trouverBoutonAjouterLigne();
             if (!btnAjouter) throw new Error('Bouton "Ajouter une ligne" introuvable');
             clicOdoo(btnAjouter);
-            await attendreOdoo(350, factor);
+            await attendreOdoo(600, factor);
             const lignes = document.querySelectorAll('tr.o_data_row');
             ligneEdition = lignes[lignes.length - 1];
           }
           if (!ligneEdition) throw new Error('Impossible d’ouvrir la ligne de saisie');
 
-          const traiterDropdown = async (nomChamp, motColonne, valeurExcel, typeChamp, cleRegle, motsCles = [], autoriserModal = true) => {
+          const traiterDropdown = async (nomChamp, motColonne, valeurExcel, typeChamp, cleRegle, motsCles = []) => {
             const cell = getCelluleParColonne(ligneEdition, motColonne);
             if (!cell) return { needInput: false };
 
-            let choix = regles[cleRegle] || window.odooCache[cleRegle];
-
-            // Tentative directe ultra-rapide sur Budget, GL et Unité
-            if (!choix && valeurExcel && ['BUDGET', 'GL', 'UNITE'].includes(typeChamp)) {
-              const okDirect = await selectionnerOptionDirecte(cell, valeurExcel, factor);
-              if (okDirect) {
-                const inputVal = cell.querySelector('input')?.value?.trim() || valeurExcel;
-                window.odooCache[cleRegle] = inputVal;
-                remplis.push(`${nomChamp}:${inputVal}`);
-                return { needInput: false };
-              }
-            }
+            let choix = regles[cleRegle];
 
             if (!choix) {
-              const options = await lireToutesOptionsCellule(cell, factor, motsCles, autoriserModal);
+              // Utilise la nouvelle lecture complète (qui ouvre "Recherche avancée..." + filtre par mots-clés)
+              const options = await lireToutesOptionsCellule(cell, factor, motsCles);
 
               if (options.length === 0) {
                 cell.style.outline = '3px solid #ff9800';
@@ -402,88 +391,122 @@ if (!window.odooTurboProV14) {
                   needInput: true,
                   champ: nomChamp,
                   valeurExcel: valeurExcel,
-                  raison: `${options.length} option(s) trouvée(s) sur Odoo. Sélectionnez :`,
+                  raison: `${options.length} option(s) trouvée(s) (incluant Recherche avancée). Choisissez :`,
                   optionsDisponibles: options,
                   cleRegle: cleRegle
                 };
               }
             }
 
-            const ok = await selectionnerOptionDirecte(cell, choix, factor);
+            const ok = await selectionnerOptionExacte(cell, choix, factor);
             if (!ok) {
-              const options = await lireToutesOptionsCellule(cell, factor, motsCles, autoriserModal);
+              const options = await lireToutesOptionsCellule(cell, factor, motsCles);
               cell.style.outline = '3px solid #ff9800';
               return {
                 needInput: true,
                 champ: nomChamp,
                 valeurExcel: valeurExcel,
-                raison: `Impossible de valider "${choix}". Choisissez dans la liste :`,
+                raison: `Impossible de valider "${choix}". Choisissez dans la liste complète :`,
                 optionsDisponibles: options.length > 0 ? options : ['-- Aucune option trouvée --'],
                 cleRegle: cleRegle
               };
             }
 
-            window.odooCache[cleRegle] = choix;
             remplis.push(`${nomChamp}:${choix}`);
             return { needInput: false };
           };
 
           const codeAS = extraireCodeAS(d.CodeBudgetaire) || extraireCodeAS(d.Projet) || '';
-          const motsProduit = extraireMotsCles(d.Description);
+          const motsProduit = extraireMotsClesRecherche(d.Description);
 
-          // 1. Produits
-          const resProd = await traiterDropdown('Produits', 'Produits', d.Description, 'PRODUIT', `PROD|${d.Description}`, motsProduit, true);
+          // 1. Produits (cherche dans les 8 premiers + Recherche avancée + mots-clés du produit)
+          const resProd = await traiterDropdown(
+            'Produits',
+            'Produits',
+            d.Description,
+            'PRODUIT',
+            `PROD|${d.Description}`,
+            motsProduit
+          );
           if (resProd.needInput) {
             sendResponse({ status: 'NEED_USER_INPUT', ligneDesc: d.Description, ...resProd });
             return;
           }
-          await attendreOdoo(280, factor);
+          await attendreOdoo(550, factor);
 
           // 2. Description & Quantité
           if (await saisirTexte(getCelluleParColonne(ligneEdition, 'Description'), d.Description, factor)) remplis.push('Desc');
           if (await saisirTexte(getCelluleParColonne(ligneEdition, 'Quantité'), d.Quantite, factor)) remplis.push(`Qté:${d.Quantite}`);
 
           // 3. Unité
-          const resUnite = await traiterDropdown('Unité', 'Unité', d.Unite, 'UNITE', `UNITE|${d.Unite}`, [d.Unite], false);
+          const resUnite = await traiterDropdown('Unité', 'Unité', d.Unite, 'UNITE', `UNITE|${d.Unite}`, [d.Unite]);
           if (resUnite.needInput) {
             sendResponse({ status: 'NEED_USER_INPUT', ligneDesc: d.Description, ...resUnite });
             return;
           }
 
           // 4. Analytic plan
-          const resAna = await traiterDropdown('Analytic plan', 'Analytic', `${codeAS} ${d.Projet}`.trim(), 'ANALYTIC', `ANA|${codeAS || d.Projet}`, [codeAS, d.Projet].filter(Boolean), false);
+          const resAna = await traiterDropdown(
+            'Analytic plan',
+            'Analytic',
+            `${codeAS} ${d.Projet}`.trim(),
+            'ANALYTIC',
+            `ANA|${codeAS || d.Projet}`,
+            [codeAS, d.Projet].filter(Boolean)
+          );
           if (resAna.needInput) {
             sendResponse({ status: 'NEED_USER_INPUT', ligneDesc: d.Description, ...resAna });
             return;
           }
-          await attendreOdoo(420, factor);
+          await attendreOdoo(750, factor);
 
           // 5. Code budgétaire
-          const resBud = await traiterDropdown('Code budgétaire', 'Code bud', d.CodeBudgetaire, 'BUDGET', `BUD|${d.CodeBudgetaire}`, [d.CodeBudgetaire, codeAS].filter(Boolean), false);
+          const resBud = await traiterDropdown(
+            'Code budgétaire',
+            'Code bud',
+            d.CodeBudgetaire,
+            'BUDGET',
+            `BUD|${d.CodeBudgetaire}`,
+            [codeAS, ...extraireMotsClesRecherche(d.CodeBudgetaire)].filter(Boolean)
+          );
           if (resBud.needInput) {
             sendResponse({ status: 'NEED_USER_INPUT', ligneDesc: d.Description, ...resBud });
             return;
           }
-          await attendreOdoo(320, factor);
+          await attendreOdoo(550, factor);
 
           // 6. Activité
-          const resAct = await traiterDropdown('Activité', 'Activité', d.Activite, 'ACTIVITE', `ACT|${d.CodeBudgetaire}|${d.Activite}`, extraireMotsCles(d.Activite), true);
+          const resAct = await traiterDropdown(
+            'Activité',
+            'Activité',
+            d.Activite,
+            'ACTIVITE',
+            `ACT|${d.CodeBudgetaire}|${d.Activite}`,
+            extraireMotsClesRecherche(d.Activite)
+          );
           if (resAct.needInput) {
             sendResponse({ status: 'NEED_USER_INPUT', ligneDesc: d.Description, ...resAct });
             return;
           }
-          await attendreOdoo(250, factor);
+          await attendreOdoo(450, factor);
 
           // 7. GL code
           const numGL = String(d.CodeGL || '').match(/\d{3,6}/)?.[0] || '';
-          const resGL = await traiterDropdown('GL code', 'GL code', d.CodeGL, 'GL', `GL|${d.CodeBudgetaire}|${d.CodeGL || d.Activite}`, numGL ? [numGL] : [], false);
+          const resGL = await traiterDropdown(
+            'GL code',
+            'GL code',
+            d.CodeGL,
+            'GL',
+            `GL|${d.CodeBudgetaire}|${d.CodeGL}`,
+            numGL ? [numGL] : []
+          );
           if (resGL.needInput) {
             sendResponse({ status: 'NEED_USER_INPUT', ligneDesc: d.Description, ...resGL });
             return;
           }
-          await attendreOdoo(220, factor);
+          await attendreOdoo(400, factor);
 
-          // 8. Date & Prix
+          // 8. Date & Prix à droite
           if (d.DateLivraison && await saisirTexte(getCelluleParColonne(ligneEdition, 'Date de livr'), d.DateLivraison, factor)) {
             remplis.push('Date');
           }
@@ -491,12 +514,12 @@ if (!window.odooTurboProV14) {
             remplis.push('Prix');
           }
 
-          // 9. Validation et ligne suivante
+          // 9. Validation et saut à la ligne suivante
           if (!window.abortOdooTask) {
             const headerForm = document.querySelector('.o_form_sheet');
             if (headerForm) {
               clicOdoo(headerForm);
-              await attendreOdoo(380, factor);
+              await attendreOdoo(700, factor);
             }
 
             const champsInvalides = Array.from(ligneEdition.querySelectorAll('.o_field_invalid'));
@@ -507,7 +530,7 @@ if (!window.odooTurboProV14) {
                 const i = cells.indexOf(td);
                 return headers[i] ? headers[i].innerText.trim() : 'Champ inconnu';
               });
-              throw new Error(`Champs non validés : [${nomsBloques.join(', ')}]`);
+              throw new Error(`Champs obligatoires manquants : [${nomsBloques.join(', ')}]`);
             }
 
             if (!request.isLastLine) {
@@ -515,11 +538,11 @@ if (!window.odooTurboProV14) {
               const btnAjouter = trouverBoutonAjouterLigne();
               if (btnAjouter) {
                 clicOdoo(btnAjouter);
-                await attendreOdoo(420, factor);
+                await attendreOdoo(750, factor);
                 if (document.querySelectorAll('tr.o_data_row').length <= nbAvant) {
                   const lien = btnAjouter.querySelector('a') || btnAjouter;
                   lien.click();
-                  await attendreOdoo(420, factor);
+                  await attendreOdoo(750, factor);
                 }
               }
             }

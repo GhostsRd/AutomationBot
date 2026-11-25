@@ -3,74 +3,67 @@
 <head>
   <meta charset="UTF-8">
   <style>
-    body { font-family: 'Segoe UI', Arial, sans-serif; padding: 10px; background: #f4f6f8; font-size: 12.5px; color: #222; }
-    h3 { margin: 0 0 8px 0; color: #1b5e20; font-size: 15px; }
-    .box { background: #fff; padding: 10px; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin-bottom: 8px; }
-    input[type="file"] { width: 100%; font-size: 12px; }
-    .row-ctrl { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; font-size: 11.5px; }
-    .row-ctrl input[type="range"] { width: 52%; }
-    .btn-group { display: flex; gap: 6px; margin-bottom: 8px; }
-    button { flex: 1; padding: 9px 6px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 12px; transition: opacity 0.2s; }
-    button:hover:not(:disabled) { opacity: 0.9; }
-    #startBtn { background: #2e7d32; color: white; }
-    #stopBtn { background: #c62828; color: white; }
-    button:disabled { background: #bdbdbd !important; cursor: not-allowed; }
+    body { font-family: Arial, sans-serif; padding: 12px; background: #f4f6f8; font-size: 13px; }
+    h3 { margin: 0 0 10px 0; color: #222; }
+    .box { background: white; padding: 10px; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 10px; }
+    input[type="file"] { width: 100%; }
+    .speed-control { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; font-size: 12px; }
+    .speed-control input[type="range"] { width: 55%; }
+    .btn-group { display: flex; gap: 6px; margin-bottom: 10px; }
+    button { flex: 1; padding: 10px 6px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 12px; }
+    #startBtn { background: #2E7D32; color: white; }
+    #stopBtn { background: #D32F2F; color: white; }
+    button:disabled { background: #ccc !important; cursor: not-allowed; }
 
-    /* Résumé rapide de l'Excel */
-    #summaryBox { display: none; background: #e8f5e9; border-left: 4px solid #2e7d32; padding: 8px; border-radius: 4px; margin-bottom: 8px; font-size: 11.5px; }
-
-    /* Boîte d'assistance interactive */
+    /* Boîte d'alerte interactive quand le robot demande votre choix */
     #askBox {
       display: none;
       background: #fff8e1;
-      border: 2px solid #ff8f00;
+      border: 2px solid #ffb300;
       border-radius: 6px;
       padding: 10px;
-      margin-bottom: 8px;
+      margin-bottom: 10px;
     }
     #askBox h4 { margin: 0 0 6px 0; color: #e65100; font-size: 13px; }
-    #askContext { font-size: 11px; background: #fff; padding: 6px; border-radius: 4px; margin-bottom: 8px; border: 1px solid #ffe082; }
-    #askFilter { width: 95%; padding: 5px; margin-bottom: 6px; border: 1px solid #ccc; border-radius: 4px; font-size: 11.5px; }
+    #askContext { font-size: 11px; color: #333; margin-bottom: 8px; background: #fff; padding: 6px; border-radius: 4px; }
     #askSelect { width: 100%; padding: 6px; margin-bottom: 8px; border: 1px solid #ffa000; border-radius: 4px; font-size: 12px; }
-    #confirmChoiceBtn { width: 100%; background: #ef6c00; color: white; padding: 8px; }
+    #confirmChoiceBtn { width: 100%; background: #ef6c00; color: white; padding: 8px; border-radius: 4px; }
 
-    #logs { height: 220px; overflow-y: auto; background: #16181a; color: #00e676; padding: 8px; font-family: Consolas, monospace; font-size: 11px; border-radius: 4px; line-height: 1.4; }
+    #logs { height: 240px; overflow-y: auto; background: #181818; color: #00e676; padding: 10px; font-family: monospace; font-size: 11px; border-radius: 4px; line-height: 1.4; }
     .err { color: #ff5252; }
     .info { color: #40c4ff; }
     .warn { color: #ffd740; }
   </style>
 </head>
 <body>
-  <h3>⚡ Automate Odoo DAS Pro</h3>
+  <h3>🤖 Automate Odoo Assisté</h3>
 
   <div class="box">
     <input type="file" id="excelFile" accept=".xlsx, .xls, .csv" />
-    <div class="row-ctrl">
-      <label for="speedSlider">🚀 Vitesse :</label>
-      <input type="range" id="speedSlider" min="0.5" max="3" step="0.25" value="1" />
-      <span id="speedLabel"><strong>1x (Rapide)</strong></span>
+    <div class="speed-control">
+      <label for="speedSlider">⏱️ Délai Odoo :</label>
+      <input type="range" id="speedSlider" min="1" max="4" step="0.5" value="2" />
+      <span id="speedLabel"><strong>2x</strong></span>
     </div>
   </div>
 
-  <div id="summaryBox"></div>
-
   <div class="btn-group">
-    <button id="startBtn" disabled>▶️ Lancer la saisie</button>
+    <button id="startBtn" disabled>▶️ Démarrer</button>
     <button id="stopBtn" disabled>⏹ Arrêter</button>
   </div>
 
+  <!-- Panneau qui apparaît uniquement si le robot a besoin de votre décision -->
   <div id="askBox">
-    <h4 id="askTitle">🤔 Choix requis</h4>
+    <h4 id="askTitle">🤔 Choix requis pour continuer</h4>
     <div id="askContext"></div>
-    <input type="text" id="askFilter" placeholder="🔍 Filtrer dans la liste..." />
     <select id="askSelect"></select>
     <label style="font-size:11px; display:block; margin-bottom:8px;">
-      <input type="checkbox" id="rememberChoice" checked /> Appliquer automatiquement aux lignes identiques
+      <input type="checkbox" id="rememberChoice" checked /> Mémoriser ce choix pour les lignes similaires
     </label>
     <button id="confirmChoiceBtn">✅ Valider et continuer</button>
   </div>
 
-  <div id="logs">Prêt. Chargez votre fichier Excel DAS...<br></div>
+  <div id="logs">Chargez votre fichier Excel pour démarrer...<br></div>
 
   <script src="xlsx.full.min.js"></script>
   <script src="sidepanel.js"></script>
